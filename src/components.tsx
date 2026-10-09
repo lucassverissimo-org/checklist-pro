@@ -7,11 +7,13 @@ export function Modal({
   onClose,
   children,
   busy = false,
+  className = "",
 }: {
   title: string;
   onClose: () => void;
   children: React.ReactNode;
   busy?: boolean;
+  className?: string;
 }) {
   const ref = React.useRef<HTMLDialogElement>(null);
   const id = React.useId();
@@ -23,8 +25,9 @@ export function Modal({
   return (
     <dialog
       ref={ref}
-      className="modal"
+      className={`modal ${className}`}
       aria-labelledby={id}
+      onKeyDown={(event) => event.stopPropagation()}
       onCancel={(event) => {
         event.preventDefault();
         if (!busy) onClose();

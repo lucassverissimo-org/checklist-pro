@@ -1,5 +1,24 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
+test("tema alterna e persiste no celular", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Ativar tema escuro" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(
+    page.getByRole("button", { name: "Ativar tema claro" }),
+  ).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Ativar tema claro" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+});
+
 async function pasteList(input: Locator, text: string) {
   await input.evaluate((element, text) => {
     const clipboard = new DataTransfer();
@@ -171,6 +190,69 @@ test("demonstração preserva anexos locais e permite manter lista como um item"
   await expect(
     page.getByRole("button", { name: "Baixar local.pdf", exact: true }),
   ).toBeVisible();
+  await page.getByLabel("Adicionar anexo", { exact: true }).setInputFiles({
+    name: "miniatura.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aS1cAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect
+    .poll(() =>
+      page
+        .getByAltText("Miniatura de miniatura.png")
+        .evaluate((img) => (img as HTMLImageElement).naturalWidth),
+    )
+    .toBe(1);
+  await expect(page.locator(".attachment-thumbnail")).toHaveCount(1);
+  await page
+    .getByRole("button", { name: "Abrir imagem miniatura.png" })
+    .click();
+  const viewer = page.getByRole("dialog", {
+    name: "miniatura.png",
+    exact: true,
+  });
+  await expect
+    .poll(() =>
+      viewer
+        .getByAltText("miniatura.png", { exact: true })
+        .evaluate((img) => (img as HTMLImageElement).naturalWidth),
+    )
+    .toBe(1);
+  await viewer.getByRole("button", { name: "Aumentar zoom" }).click();
+  await expect(viewer.getByLabel("Zoom da imagem")).toHaveText("125%");
+  await viewer.getByRole("button", { name: "Ajustar" }).click();
+  const surface = viewer.locator(".image-viewport");
+  const bounds = (await surface.boundingBox())!;
+  const touch = await page.context().newCDPSession(page);
+  const x = bounds.x + bounds.width / 2,
+    y = bounds.y + bounds.height / 2;
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: [
+      { x: x - 50, y, id: 1 },
+      { x: x + 50, y, id: 2 },
+    ],
+  });
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchMove",
+    touchPoints: [
+      { x: x - 100, y, id: 1 },
+      { x: x + 100, y, id: 2 },
+    ],
+  });
+  await expect(viewer.getByLabel("Zoom da imagem")).toHaveText("200%");
+  await touch.send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+  await touch.detach();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Abrir imagem miniatura.png" }),
+  ).toBeFocused();
   await page.getByRole("button", { name: "Cancelar", exact: true }).click();
   await page
     .getByRole("button", {
@@ -194,6 +276,13 @@ test("demonstração preserva anexos locais e permite manter lista como um item"
     .getByRole("button", { name: "Baixar local.pdf", exact: true })
     .click();
   expect((await download).suggestedFilename()).toBe("local.pdf");
+  await expect
+    .poll(() =>
+      page
+        .getByAltText("Miniatura de miniatura.png")
+        .evaluate((img) => (img as HTMLImageElement).naturalWidth),
+    )
+    .toBe(1);
 });
 
 test("edita checklist, seção e item sem modal no computador e celular", async ({
@@ -232,7 +321,12 @@ test("edita checklist, seção e item sem modal no computador e celular", async 
     })
     .click();
   await page.getByLabel("Descrição do item").fill("Rascunho descartado");
-  await page.getByLabel("Descrição do item").press("Escape");
+  await page
+    .getByRole("button", {
+      name: "Editar item: Definir o que precisa ser feito",
+      exact: true,
+    })
+    .click();
   await expect(page.getByLabel("Descrição do item")).toHaveCount(0);
   await page
     .getByRole("button", {

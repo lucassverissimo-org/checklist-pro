@@ -26,7 +26,7 @@ import {
   ChevronDown,
   ChevronRight,
   GripVertical,
-  MessageSquare,
+  SlidersHorizontal,
   Pencil,
   Flag,
 } from "lucide-react";
@@ -308,7 +308,8 @@ function SortableSection(
             className="iconbtn"
             aria-label={`Renomear seção ${section.title}`}
             disabled={props.disabled}
-            onClick={() => setEditing(true)}
+            aria-expanded={editing}
+            onClick={() => setEditing((open) => !open)}
           >
             <Pencil size={15} />
           </button>
@@ -470,15 +471,20 @@ function SortableTask(props: Props & { section: Section; task: Task }) {
         </label>
         <div className="task-actions">
           <button
-            className={`iconbtn ${task.comment || files.length ? "with-comment" : ""}`}
+            className={`iconbtn ${task.comment || files.length || (task.priority && task.priority !== "none") ? "with-comment" : ""}`}
             aria-label={`Detalhes do item: ${task.text}`}
             title="Comentário, prioridade e anexos"
             disabled={props.disabled || detailsBusy}
             aria-expanded={commentOpen}
-            onClick={() => setCommentOpen((open) => !open)}
+            onClick={() => {
+              setEditing(false);
+              setCommentOpen((open) => !open);
+            }}
           >
-            <MessageSquare size={16} />
-            {(task.comment || files.length > 0) && (
+            <SlidersHorizontal size={16} />
+            {(task.comment ||
+              files.length > 0 ||
+              (task.priority && task.priority !== "none")) && (
               <span className="comment-dot" />
             )}
           </button>
@@ -486,10 +492,11 @@ function SortableTask(props: Props & { section: Section; task: Task }) {
             className="iconbtn"
             aria-label={`Editar item: ${task.text}`}
             title="Editar item"
+            aria-expanded={editing}
             disabled={props.disabled || detailsBusy}
             onClick={() => {
               setCommentOpen(false);
-              setEditing(true);
+              setEditing((open) => !open);
             }}
           >
             <Pencil size={15} />

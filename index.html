@@ -10,6 +10,16 @@
       content="Crie um checklist, compartilhe um link e organize tudo junto com sua equipe. Sem cadastro."
     />
     <title>Checklist Pro — organize juntos</title>
+    <script>
+      try {
+        document.documentElement.dataset.theme =
+          localStorage.getItem("checklist-pro-theme") === "dark"
+            ? "dark"
+            : "light";
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

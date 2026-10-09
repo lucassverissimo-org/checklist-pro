@@ -12,11 +12,13 @@ import {
   Link2,
   ListChecks,
   LoaderCircle,
+  Moon,
   Pencil,
   Plus,
   Search,
   Share2,
   Shield,
+  Sun,
   Trash2,
   Users,
   WifiOff,
@@ -46,6 +48,17 @@ function currentAccess(): Access | null {
 }
 
 export default function App() {
+  const [theme, setTheme] = React.useState<"light" | "dark">(() =>
+    document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+  );
+  React.useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("checklist-pro-theme", theme);
+    } catch {
+      // The toggle still works when browser storage is unavailable.
+    }
+  }, [theme]);
   const [access, setAccess] = React.useState<Access | null>(currentAccess);
   React.useEffect(() => {
     const change = () => setAccess(currentAccess());
@@ -78,9 +91,23 @@ export default function App() {
               checklist<span className="brand-pro">pro</span>
             </span>
           </button>
-          <span className="topbar-note">
-            <Users size={15} /> Organize juntos.
-          </span>
+          <div className="topbar-actions">
+            <span className="topbar-note">
+              <Users size={15} /> Organize juntos.
+            </span>
+            <button
+              className="btn theme-toggle"
+              aria-label={
+                theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"
+              }
+              title={
+                theme === "light" ? "Ativar tema escuro" : "Ativar tema claro"
+              }
+              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            >
+              {theme === "light" ? <Moon size={20} /> : <Sun size={20} />}
+            </button>
+          </div>
         </div>
       </header>
       {!api.configured && (
@@ -439,10 +466,11 @@ function Board({
             <button
               className="iconbtn"
               aria-label="Renomear checklist"
-              disabled={blocked || editingTitle}
+              disabled={blocked}
+              aria-expanded={editingTitle}
               onClick={() => {
                 clearError();
-                setEditingTitle(true);
+                setEditingTitle((open) => !open);
               }}
             >
               <Pencil size={18} />

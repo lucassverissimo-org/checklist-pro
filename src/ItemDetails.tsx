@@ -1,7 +1,15 @@
 import React from "react";
-import { Check, Download, Paperclip, Trash2, X } from "lucide-react";
+import {
+  Check,
+  Download,
+  Image as ImageIcon,
+  Paperclip,
+  Trash2,
+  X,
+} from "lucide-react";
 import type { Access, Attachment, Operation, Priority, Task } from "./model";
 import { fileAction, fileTypes, uploadFile } from "./attachments";
+import { ImageViewer } from "./ImageViewer";
 
 export const priorityLabels: Record<Priority, string> = {
   none: "Sem prioridade",
@@ -9,6 +17,79 @@ export const priorityLabels: Record<Priority, string> = {
   medium: "Média",
   high: "Alta",
 };
+
+function AttachmentThumbnail({
+  access,
+  file,
+}: {
+  access: Access;
+  file: Attachment;
+}) {
+  const [url, setUrl] = React.useState<string>();
+  const [failed, setFailed] = React.useState(false);
+  const [open, setOpen] = React.useState(false);
+  const thumbnail = React.useRef<HTMLButtonElement>(null);
+  React.useEffect(() => {
+    let active = true;
+    let objectUrl: string | undefined;
+    setUrl(undefined);
+    setFailed(false);
+    void fileAction(access, "download", file.id).then(
+      (result) => {
+        if (result.url?.startsWith("blob:")) objectUrl = result.url;
+        if (active) {
+          if (result.url) setUrl(result.url);
+          else setFailed(true);
+        } else if (objectUrl) URL.revokeObjectURL(objectUrl);
+      },
+      () => {
+        if (active) setFailed(true);
+      },
+    );
+    return () => {
+      active = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [access.id, access.token, access.demo, file.id]);
+  return (
+    <>
+      <button
+        type="button"
+        className="attachment-thumbnail"
+        ref={thumbnail}
+        aria-label={`Abrir imagem ${file.name}`}
+        onClick={() => setOpen(true)}
+      >
+        {url && !failed ? (
+          <img
+            src={url}
+            alt={`Miniatura de ${file.name}`}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={() => setFailed(true)}
+          />
+        ) : (
+          <ImageIcon
+            size={22}
+            aria-label={
+              failed ? "Miniatura indisponível" : "Carregando miniatura"
+            }
+          />
+        )}
+      </button>
+      {open && (
+        <ImageViewer
+          access={access}
+          file={file}
+          onClose={() => {
+            setOpen(false);
+            requestAnimationFrame(() => thumbnail.current?.focus());
+          }}
+        />
+      )}
+    </>
+  );
+}
 
 export function ItemDetails({
   access,
@@ -228,6 +309,9 @@ export function ItemDetails({
         </h4>
         {files.map((file) => (
           <div className="attachment-row" key={file.id}>
+            {file.mime.startsWith("image/") && (
+              <AttachmentThumbnail access={access} file={file} />
+            )}
             <span className="attachment-name">
               {file.name}
               <small>{Math.max(1, Math.ceil(file.size / 1024))} KB</small>
