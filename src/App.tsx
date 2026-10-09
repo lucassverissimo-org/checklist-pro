@@ -49,7 +49,7 @@ function currentAccess(): Access | null {
 
 export default function App() {
   const [theme, setTheme] = React.useState<"light" | "dark">(() =>
-    document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+    document.documentElement.dataset.theme === "light" ? "light" : "dark",
   );
   React.useEffect(() => {
     document.documentElement.dataset.theme = theme;

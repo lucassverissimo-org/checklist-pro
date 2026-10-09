@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -13,11 +13,11 @@
     <script>
       try {
         document.documentElement.dataset.theme =
-          localStorage.getItem("checklist-pro-theme") === "dark"
-            ? "dark"
-            : "light";
+          localStorage.getItem("checklist-pro-theme") === "light"
+            ? "light"
+            : "dark";
       } catch {
-        document.documentElement.dataset.theme = "light";
+        document.documentElement.dataset.theme = "dark";
       }
     </script>
   </head>
