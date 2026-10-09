@@ -29,14 +29,12 @@ import {
   parseAccess,
   uniqueId,
   type Access,
-  type Operation,
-  type Section,
-  type Task,
 } from "./model";
-import { Editor, Modal, Share } from "./components";
+import { Modal, Share } from "./components";
 import { useChecklist } from "./useChecklist";
 import { ChecklistSections } from "./ChecklistSections";
 import { QuickAdd } from "./QuickAdd";
+import { InlineEditor } from "./InlineActions";
 
 function currentAccess(): Access | null {
   const parsed = parseAccess(window.location.hash);
@@ -132,7 +130,7 @@ function Home({ onOpen }: { onOpen: (access: Access) => void }) {
           </h1>
           <p>
             Do próximo evento às tarefas da semana: crie um checklist, envie o
-            link e acompanhe cada etapa com sua equipe.
+            link e acompanhe cada seção com sua equipe.
           </p>
           <div className="intro-features">
             <span>
@@ -142,7 +140,7 @@ function Home({ onOpen }: { onOpen: (access: Access) => void }) {
               <Check size={16} /> Fácil no celular
             </span>
             <span>
-              <Check size={16} /> Comentários por atividade
+              <Check size={16} /> Comentários por item
             </span>
           </div>
         </section>
@@ -194,7 +192,7 @@ function Home({ onOpen }: { onOpen: (access: Access) => void }) {
                 onChange={(e) => setExample(e.target.checked)}
               />
               <span>
-                Começar com algumas atividades de exemplo
+                Começar com alguns itens de exemplo
                 <small>Você pode editar ou remover tudo depois.</small>
               </span>
             </label>
@@ -276,13 +274,6 @@ function Home({ onOpen }: { onOpen: (access: Access) => void }) {
   );
 }
 
-type Edit = {
-  kind: "title" | "section" | "new-section" | "task" | "new-task" | "comment";
-  section?: Section;
-  task?: Task;
-  initial: string;
-};
-
 function Board({
   access,
   onHome,
@@ -294,18 +285,15 @@ function Board({
   onOpen: (access: Access) => void;
   onAccessChange: (access: Access) => void;
 }) {
-  const { snapshot, status, error, save, clearError } = useChecklist(access);
+  const { snapshot, status, error, save, clearError, undos, refreshNow } =
+    useChecklist(access);
   const [closed, setClosed] = React.useState<string[]>([]);
   const [search, setSearch] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [edit, setEdit] = React.useState<Edit | null>(null);
+  const [priorityFilter, setPriorityFilter] = React.useState("all");
+  const [editingTitle, setEditingTitle] = React.useState(false);
   const [share, setShare] = React.useState(false);
   const [manage, setManage] = React.useState(false);
-  const [confirm, setConfirm] = React.useState<{
-    title: string;
-    description: string;
-    operation: Operation;
-  } | null>(null);
   const [adminBusy, setAdminBusy] = React.useState(false);
   const [adminError, setAdminError] = React.useState("");
   const [notice, setNotice] = React.useState("");
@@ -327,10 +315,6 @@ function Board({
       document.title = "Checklist Pro — organize juntos";
     };
   }, [data?.title]);
-  const startEdit = (next: Edit) => {
-    clearError();
-    setEdit(next);
-  };
   async function rotateLink() {
     if (
       !window.confirm(
@@ -392,34 +376,17 @@ function Board({
       visible: s.tasks.filter(
         (t) =>
           (!pending || !t.done) &&
+          (priorityFilter === "all" ||
+            (t.priority ?? "none") === priorityFilter) &&
           `${s.title} ${t.text} ${t.comment}`
             .toLocaleLowerCase("pt-BR")
             .includes(search.toLocaleLowerCase("pt-BR")),
       ),
     }))
-    .filter((s) => (!pending && !search) || s.visible.length);
-  const currentSection =
-    edit?.section && data.sections.find((s) => s.id === edit.section!.id);
-  const currentTask =
-    edit?.task && currentSection?.tasks.find((t) => t.id === edit.task!.id);
-  const currentValue =
-    edit?.kind === "title"
-      ? data.title
-      : edit?.kind === "section"
-        ? currentSection?.title
-        : edit?.kind === "task"
-          ? currentTask?.text
-          : edit?.kind === "comment"
-            ? currentTask?.comment
-            : undefined;
-  const editDeleted =
-    edit &&
-    ((edit.kind === "section" && !currentSection) ||
-      ((edit.kind === "task" ||
-        edit.kind === "comment" ||
-        edit.kind === "new-task") &&
-        !currentSection) ||
-      ((edit.kind === "task" || edit.kind === "comment") && !currentTask));
+    .filter(
+      (s) =>
+        (!pending && !search && priorityFilter === "all") || s.visible.length,
+    );
   return (
     <main className="container board">
       <div className="board-breadcrumb">
@@ -453,22 +420,40 @@ function Board({
               : "UM CHECKLIST PARA FAZER JUNTOS"}
           </span>
           <div className="board-title">
-            <h1>{data.title}</h1>
+            {editingTitle ? (
+              <InlineEditor
+                label="Nome do checklist"
+                current={data.title}
+                disabled={blocked}
+                multiline={false}
+                allowEmpty={false}
+                limit={120}
+                onClose={() => setEditingTitle(false)}
+                onSave={(title, expected) =>
+                  save({ type: "rename", title, expected })
+                }
+              />
+            ) : (
+              <h1>{data.title}</h1>
+            )}
             <button
               className="iconbtn"
               aria-label="Renomear checklist"
-              disabled={blocked}
-              onClick={() => startEdit({ kind: "title", initial: data.title })}
+              disabled={blocked || editingTitle}
+              onClick={() => {
+                clearError();
+                setEditingTitle(true);
+              }}
             >
               <Pencil size={18} />
             </button>
           </div>
           <p>
             {total === 0
-              ? "Comece criando uma etapa. Depois, adicione suas atividades."
+              ? "Comece criando uma seção. Depois, adicione seus itens."
               : done === total
                 ? "Tudo concluído. Bom trabalho, equipe!"
-                : `${total - done} ${total - done === 1 ? "atividade para concluir" : "atividades para concluir"}. Cada passo faz a diferença.`}
+                : `${total - done} ${total - done === 1 ? "item para concluir" : "itens para concluir"}. Cada passo faz a diferença.`}
           </p>
           <div className="hero-buttons">
             {!access.demo && (
@@ -488,7 +473,7 @@ function Board({
               disabled={blocked}
               onClick={focusNewSection}
             >
-              <Plus size={16} /> Nova etapa
+              <Plus size={16} /> Nova seção
             </button>
             {snapshot.role === "admin" && (
               <button
@@ -517,7 +502,7 @@ function Board({
             <div style={{ width: `${percent}%` }} />
           </div>
           <p>
-            {done} de {total} atividades concluídas
+            {done} de {total} itens concluídos
           </p>
         </div>
       </section>
@@ -527,7 +512,7 @@ function Board({
           este checklist não é compartilhado entre dispositivos.
         </p>
       )}
-      {!edit && error && (
+      {error && (
         <p className="error board-error" role="alert">
           {error}
           <button
@@ -555,12 +540,24 @@ function Board({
         <label className="search">
           <Search size={18} />
           <input
-            aria-label="Pesquisar atividades"
-            placeholder="Pesquisar atividades…"
+            aria-label="Pesquisar itens"
+            placeholder="Pesquisar itens…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </label>
+        <select
+          className="priority-filter"
+          aria-label="Filtrar por prioridade"
+          value={priorityFilter}
+          onChange={(event) => setPriorityFilter(event.target.value)}
+        >
+          <option value="all">Todas as prioridades</option>
+          <option value="high">Alta</option>
+          <option value="medium">Média</option>
+          <option value="low">Baixa</option>
+          <option value="none">Sem prioridade</option>
+        </select>
         <label className="pending-filter">
           <input
             type="checkbox"
@@ -591,60 +588,45 @@ function Board({
         </div>
       </div>
       <ChecklistSections
+        access={access}
+        attachments={snapshot.attachments ?? []}
+        onRefresh={refreshNow}
         document={data}
         sections={filtered}
         closed={closed}
         disabled={blocked}
-        filtered={!!search || pending}
+        filtered={!!search || pending || priorityFilter !== "all"}
         onClosed={setClosed}
         onSave={save}
-        onEditSection={(section) =>
-          startEdit({ kind: "section", section, initial: section.title })
-        }
-        onDeleteSection={(section) => {
-          clearError();
-          setConfirm({
-            title: "Excluir etapa?",
-            description: `A etapa “${section.title}” e suas ${section.tasks.length} atividades serão removidas para todos.`,
-            operation: {
-              type: "delete_section",
-              sectionId: section.id,
-              expected: section,
-            },
-          });
-        }}
-        onEditTask={(section, task) =>
-          startEdit({ kind: "task", section, task, initial: task.text })
-        }
-        onComment={(section, task) =>
-          startEdit({ kind: "comment", section, task, initial: task.comment })
-        }
-        onDeleteTask={(section, task) => {
-          clearError();
-          setConfirm({
-            title: "Excluir atividade?",
-            description: `“${task.text}” será removida para todos, incluindo seu comentário.`,
-            operation: {
-              type: "delete_task",
-              sectionId: section.id,
-              taskId: task.id,
-              expected: task,
-            },
-          });
-        }}
       />
+      {undos.length > 0 && (
+        <div className="undo-stack" aria-live="polite">
+          {undos.map((undo) => (
+            <div className="undo-toast" key={undo.id}>
+              <span>{undo.label}</span>
+              <button
+                className="btn small"
+                disabled={blocked}
+                onClick={() => void save({ type: "restore", undoId: undo.id })}
+              >
+                Desfazer
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       {!filtered.length && (
         <div className="empty-home">
           <CheckCheck size={30} />
           <h2>
             {data.sections.length
-              ? "Nenhuma atividade por aqui"
+              ? "Nenhum item por aqui"
               : "Seu checklist está começando"}
           </h2>
           <p>
             {data.sections.length
               ? "Tente outra pesquisa ou desmarque Apenas pendentes."
-              : "Organize as atividades em etapas, como Preparação, Execução e Encerramento."}
+              : "Organize os itens em seções, como Preparação, Execução e Encerramento."}
           </p>
           {!data.sections.length && (
             <button
@@ -652,7 +634,7 @@ function Board({
               disabled={blocked}
               onClick={focusNewSection}
             >
-              <Plus size={16} /> Criar primeira etapa
+              <Plus size={16} /> Criar primeira seção
             </button>
           )}
         </div>
@@ -660,8 +642,8 @@ function Board({
       <div className="new-section-row">
         <QuickAdd
           inputRef={newSectionRef}
-          label="Nova etapa"
-          placeholder="Adicionar etapa…"
+          label="Nova seção"
+          placeholder="Adicionar seção…"
           maxLength={120}
           disabled={blocked}
           onAdded={() => {
@@ -680,6 +662,7 @@ function Board({
               addedSectionRef.current = section.id;
               setSearch("");
               setPending(false);
+              setPriorityFilter("all");
             }
             return saved;
           }}
@@ -718,151 +701,6 @@ function Board({
           <Copy size={15} /> Duplicar checklist
         </button>
       </div>
-      {edit && (
-        <Editor
-          title={
-            edit.kind === "comment"
-              ? "Comentário da atividade"
-              : edit.kind === "new-section"
-                ? "Nova etapa"
-                : edit.kind === "new-task"
-                  ? "Nova atividade"
-                  : edit.kind === "title"
-                    ? "Renomear checklist"
-                    : edit.kind === "section"
-                      ? "Renomear etapa"
-                      : "Editar atividade"
-          }
-          label={
-            edit.kind === "comment"
-              ? "Seu comentário"
-              : edit.kind === "task" || edit.kind === "new-task"
-                ? "Descrição da atividade"
-                : "Nome"
-          }
-          initial={edit.initial}
-          current={currentValue}
-          multiline={
-            edit.kind === "comment" ||
-            edit.kind === "task" ||
-            edit.kind === "new-task"
-          }
-          allowEmpty={edit.kind === "comment"}
-          limit={
-            edit.kind === "comment"
-              ? 10000
-              : edit.kind === "task" || edit.kind === "new-task"
-                ? 2000
-                : 120
-          }
-          context={edit.kind === "comment" ? edit.task?.text : undefined}
-          error={
-            editDeleted
-              ? "Este item foi movido ou excluído por outra pessoa. Copie seu texto, se quiser preservá-lo, e feche esta janela."
-              : error
-          }
-          busy={busy}
-          onClose={() => {
-            setEdit(null);
-            clearError();
-          }}
-          onSave={async (value, expected) => {
-            if (editDeleted) return false;
-            let op: Operation;
-            switch (edit.kind) {
-              case "title":
-                op = { type: "rename", title: value, expected };
-                break;
-              case "new-section":
-                op = {
-                  type: "add_section",
-                  section: { id: uniqueId(), title: value, tasks: [] },
-                };
-                break;
-              case "section":
-                op = {
-                  type: "update_section",
-                  sectionId: edit.section!.id,
-                  title: value,
-                  expected,
-                };
-                break;
-              case "new-task":
-                op = {
-                  type: "add_task",
-                  sectionId: edit.section!.id,
-                  task: {
-                    id: uniqueId(),
-                    text: value,
-                    done: false,
-                    comment: "",
-                  },
-                };
-                break;
-              case "task":
-                op = {
-                  type: "update_task",
-                  sectionId: edit.section!.id,
-                  taskId: edit.task!.id,
-                  patch: { text: value },
-                  expected: { text: expected },
-                };
-                break;
-              case "comment":
-                op = {
-                  type: "update_task",
-                  sectionId: edit.section!.id,
-                  taskId: edit.task!.id,
-                  patch: { comment: value },
-                  expected: { comment: expected },
-                };
-                break;
-            }
-            const saved = await save(op);
-            if (saved && edit.section)
-              setClosed((old) => old.filter((id) => id !== edit.section!.id));
-            return saved;
-          }}
-        />
-      )}
-      {confirm && (
-        <Modal
-          title={confirm.title}
-          busy={busy}
-          onClose={() => {
-            setConfirm(null);
-            clearError();
-          }}
-        >
-          <p className="muted">{confirm.description}</p>
-          {error && (
-            <p className="error" role="alert">
-              {error}
-            </p>
-          )}
-          <div className="modal-actions">
-            <button
-              className="btn"
-              disabled={busy}
-              onClick={() => {
-                setConfirm(null);
-                clearError();
-              }}
-            >
-              Cancelar
-            </button>
-            <button
-              className="btn destructive"
-              disabled={busy}
-              onClick={async () => {
-                if (await save(confirm.operation)) setConfirm(null);
-              }}
-            >
-              {busy ? "Excluindo…" : "Excluir"}
-            </button>
-          </div>
-        </Modal>
-      )}
       {share && (
         <Share
           editLink={
@@ -911,12 +749,6 @@ function Board({
               className="btn destructive"
               disabled={adminBusy}
               onClick={async () => {
-                if (
-                  !window.confirm(
-                    `Excluir definitivamente “${data.title}” para todos?`,
-                  )
-                )
-                  return;
                 setAdminBusy(true);
                 setAdminError("");
                 try {

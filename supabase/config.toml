@@ -1,0 +1,4 @@
+project_id = "checklist-pro"
+
+[functions.checklist-files]
+verify_jwt = false

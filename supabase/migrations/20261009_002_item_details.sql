@@ -1,19 +1,5 @@
--- Run this file in the SQL Editor of a dedicated Supabase project.
--- Tables are private: anonymous callers can use only the four token-checked RPCs.
-create schema if not exists checklist_private;
-revoke all on schema checklist_private from public, anon, authenticated;
-
-create table if not exists checklist_private.checklists (
-  id uuid primary key,
-  admin_hash text not null,
-  edit_hash text not null,
-  document jsonb not null,
-  revision bigint not null default 0,
-  updated_at timestamptz not null default now()
-);
-alter table checklist_private.checklists enable row level security;
-revoke all on checklist_private.checklists from public, anon, authenticated;
-
+-- Generated together with schema.sql. Apply in the SQL Editor once.
+begin;
 create table if not exists checklist_private.trash (
   id uuid primary key, checklist_id uuid not null references checklist_private.checklists(id) on delete cascade,
   kind text not null, section_id text, payload jsonb not null, position integer not null,
@@ -29,12 +15,6 @@ create index if not exists files_checklist on checklist_private.files(checklist_
 alter table checklist_private.trash enable row level security;
 alter table checklist_private.files enable row level security;
 revoke all on checklist_private.trash, checklist_private.files from public, anon, authenticated;
-
-
-create or replace function checklist_private.token_hash(value text)
-returns text language sql immutable strict set search_path = '' as $$
-  select pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(value, 'UTF8')), 'hex');
-$$;
 
 create or replace function checklist_private.valid_document(doc jsonb)
 returns boolean language plpgsql immutable set search_path = '' as $$
@@ -88,35 +68,6 @@ returns jsonb language sql stable set search_path = '' as $$
     'attachments', coalesce((select jsonb_agg(jsonb_build_object('id',f.id,'sectionId',f.section_id,'taskId',f.task_id,'name',f.name,'size',f.size,'mime',f.mime) order by f.created_at)
       from checklist_private.files f where f.checklist_id=c.id and f.state='ready'), '[]'::jsonb),
     'role', case when c.admin_hash = checklist_private.token_hash(token) then 'admin' else 'edit' end);
-$$;
-
-create or replace function public.pro_create(p_id uuid, p_admin_token text, p_edit_token text, p_document jsonb)
-returns jsonb language plpgsql security definer set search_path = '' as $$
-declare c checklist_private.checklists;
-begin
-  if p_id is null or p_admin_token is null or p_edit_token is null
-    or p_admin_token !~ '^[a-f0-9]{64}$' or p_edit_token !~ '^[a-f0-9]{64}$'
-    or p_admin_token = p_edit_token or not checklist_private.valid_document(p_document)
-    then raise exception 'INVALID_DOCUMENT'; end if;
-  insert into checklist_private.checklists (id, admin_hash, edit_hash, document)
-    values (p_id, checklist_private.token_hash(p_admin_token), checklist_private.token_hash(p_edit_token), p_document)
-    on conflict (id) do nothing;
-  select * into c from checklist_private.checklists where id = p_id;
-  if c.admin_hash <> checklist_private.token_hash(p_admin_token) then raise exception 'ACCESS_DENIED'; end if;
-  return checklist_private.snapshot(c, p_admin_token);
-end;
-$$;
-
-create or replace function public.pro_read(p_id uuid, p_token text)
-returns jsonb language plpgsql security definer set search_path = '' as $$
-declare c checklist_private.checklists;
-begin
-  select * into c from checklist_private.checklists where id = p_id;
-  if not found or p_token is null or length(p_token) <> 64
-    or checklist_private.token_hash(p_token) not in (c.admin_hash, c.edit_hash)
-    then raise exception 'ACCESS_DENIED'; end if;
-  return checklist_private.snapshot(c, p_token);
-end;
 $$;
 
 create or replace function public.pro_apply(p_id uuid, p_token text, p_operation jsonb)
@@ -299,6 +250,7 @@ begin
 end;
 $$;
 
+
 create or replace function public.pro_manage(p_id uuid, p_token text, p_action text, p_edit_token text default null)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare c checklist_private.checklists;
@@ -319,20 +271,6 @@ begin
   raise exception 'INVALID_OPERATION';
 end;
 $$;
-
-revoke execute on all functions in schema checklist_private from public, anon, authenticated;
-revoke execute on function public.pro_create(uuid, text, text, jsonb) from public, anon, authenticated;
-revoke execute on function public.pro_read(uuid, text) from public, anon, authenticated;
-revoke execute on function public.pro_apply(uuid, text, jsonb) from public, anon, authenticated;
-revoke execute on function public.pro_manage(uuid, text, text, text) from public, anon, authenticated;
-grant execute on function public.pro_create(uuid, text, text, jsonb) to anon, authenticated;
-grant execute on function public.pro_read(uuid, text) to anon, authenticated;
-grant execute on function public.pro_apply(uuid, text, jsonb) to anon, authenticated;
-grant execute on function public.pro_manage(uuid, text, text, text) to anon, authenticated;
-
--- No direct table access and no Realtime publication. The client reads through
--- pro_read every 3 seconds, with the same token authorization as writes.
-notify pgrst, 'reload schema';
 
 -- Only the Edge Function may call this RPC. Every action still validates the checklist link.
 create or replace function public.pro_file(p_id uuid, p_token text, p_action text, p_file jsonb default '{}'::jsonb)
@@ -402,3 +340,4 @@ grant execute on function public.pro_read(uuid,text) to service_role;
 grant execute on function public.pro_file_cleanup(uuid[]) to service_role;
 revoke execute on all functions in schema checklist_private from public,anon,authenticated;
 notify pgrst,'reload schema';
+commit;

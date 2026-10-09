@@ -1,4 +1,20 @@
-export type Task = { id: string; text: string; done: boolean; comment: string };
+export type Priority = "none" | "low" | "medium" | "high";
+export type Task = {
+  id: string;
+  text: string;
+  done: boolean;
+  comment: string;
+  priority?: Priority;
+};
+export type Attachment = {
+  id: string;
+  sectionId: string;
+  taskId: string;
+  name: string;
+  size: number;
+  mime: string;
+};
+export type Undo = { id: string; expiresAt: string; label: string };
 export type Section = { id: string; title: string; tasks: Task[] };
 export type Checklist = { title: string; sections: Section[] };
 export type Snapshot = {
@@ -6,6 +22,8 @@ export type Snapshot = {
   revision: number;
   role: "edit" | "admin";
   updatedAt: string;
+  attachments?: Attachment[];
+  undo?: Undo;
 };
 export type Access = {
   id: string;
@@ -38,16 +56,29 @@ export type Operation =
       title: string;
       expected: string;
     }
-  | { type: "delete_section"; sectionId: string; expected: Section }
+  | { type: "restore"; undoId: string }
+  | {
+      type: "delete_section";
+      sectionId: string;
+      expected: Section;
+      undoId?: string;
+    }
+  | { type: "add_tasks"; sectionId: string; tasks: Task[] }
   | { type: "add_task"; sectionId: string; task: Task }
   | {
       type: "update_task";
       sectionId: string;
       taskId: string;
-      patch: Partial<Pick<Task, "text" | "done" | "comment">>;
-      expected: Partial<Pick<Task, "text" | "done" | "comment">>;
+      patch: Partial<Pick<Task, "text" | "done" | "comment" | "priority">>;
+      expected: Partial<Pick<Task, "text" | "done" | "comment" | "priority">>;
     }
-  | { type: "delete_task"; sectionId: string; taskId: string; expected: Task };
+  | {
+      type: "delete_task";
+      sectionId: string;
+      taskId: string;
+      expected: Task;
+      undoId?: string;
+    };
 
 export class ChecklistError extends Error {
   constructor(
@@ -168,7 +199,9 @@ export function validateDocument(value: unknown): value is Checklist {
             text(t.id, 100) &&
             text(t.text, 2000) &&
             typeof t.done === "boolean" &&
-            text(t.comment, 10000, true),
+            text(t.comment, 10000, true) &&
+            (t.priority === undefined ||
+              ["none", "low", "medium", "high"].includes(t.priority)),
         ),
     ) &&
     data.sections.reduce((count, s) => count + s.tasks.length, 0) <= 2000 &&
@@ -185,7 +218,12 @@ export function applyOperation(document: Checklist, op: Operation): Checklist {
       "Este item mudou enquanto você editava. Revise a versão atual antes de salvar novamente.",
     );
   };
-  if (op.type === "rename") {
+  if (op.type === "restore") {
+    throw new ChecklistError(
+      "invalid",
+      "A restauração exige o registro da exclusão.",
+    );
+  } else if (op.type === "rename") {
     if (next.title !== op.expected) conflict();
     next.title = op.title;
   } else if (op.type === "add_section") {
@@ -238,6 +276,13 @@ export function applyOperation(document: Checklist, op: Operation): Checklist {
     } else if (op.type === "delete_section") {
       if (JSON.stringify(section) !== JSON.stringify(op.expected)) conflict();
       next.sections = next.sections.filter((s) => s.id !== section.id);
+    } else if (op.type === "add_tasks") {
+      if (!op.tasks.length || op.tasks.length > 100)
+        throw new ChecklistError("invalid", "Cole até 100 itens por vez.");
+      for (const task of op.tasks) {
+        if (section.tasks.some((t) => t.id === task.id)) conflict();
+        section.tasks.push(task);
+      }
     } else if (op.type === "add_task") {
       if (section.tasks.some((t) => t.id === op.task.id)) conflict();
       section.tasks.push(op.task);
@@ -251,7 +296,11 @@ export function applyOperation(document: Checklist, op: Operation): Checklist {
         for (const field of Object.keys(
           op.patch,
         ) as (keyof typeof op.patch)[]) {
-          if (!(field in op.expected) || task[field] !== op.expected[field])
+          if (
+            !(field in op.expected) ||
+            (field === "priority" ? (task.priority ?? "none") : task[field]) !==
+              op.expected[field]
+          )
             conflict();
         }
         Object.assign(task, op.patch);

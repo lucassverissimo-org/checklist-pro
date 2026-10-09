@@ -5,6 +5,8 @@ import {
   type Access,
   type Operation,
   type Snapshot,
+  type Undo,
+  uniqueId,
 } from "./model";
 
 export function useChecklist(access: Access) {
@@ -13,6 +15,7 @@ export function useChecklist(access: Access) {
     "loading" | "saved" | "saving" | "offline" | "unavailable"
   >("loading");
   const [error, setError] = React.useState("");
+  const [undos, setUndos] = React.useState<Undo[]>([]);
   const saving = React.useRef(false);
   const generation = React.useRef(0);
   const latestAccess = React.useRef(access);
@@ -25,6 +28,7 @@ export function useChecklist(access: Access) {
     setSnapshot(null);
     setStatus("loading");
     setError("");
+    setUndos([]);
     const refresh = async () => {
       if (reading || saving.current || document.visibilityState === "hidden")
         return;
@@ -74,6 +78,8 @@ export function useChecklist(access: Access) {
     saving.current = true;
     setStatus("saving");
     setError("");
+    if (operation.type === "delete_task" || operation.type === "delete_section")
+      operation = { ...operation, undoId: operation.undoId ?? uniqueId() };
     try {
       const next = await api.mutate(access, operation);
       if (generation.current !== session) return false;
@@ -81,6 +87,9 @@ export function useChecklist(access: Access) {
         !old || next.revision >= old.revision ? next : old,
       );
       setStatus("saved");
+      if (next.undo) setUndos((old) => [...old, next.undo!]);
+      if (operation.type === "restore")
+        setUndos((old) => old.filter((undo) => undo.id !== operation.undoId));
       api.remember(latestAccess.current, next.document.title);
       return true;
     } catch (error) {
@@ -117,5 +126,31 @@ export function useChecklist(access: Access) {
       saving.current = false;
     }
   }
-  return { snapshot, status, error, save, clearError: () => setError("") };
+  React.useEffect(() => {
+    const interval = setInterval(
+      () =>
+        setUndos((old) =>
+          old.filter((undo) => Date.parse(undo.expiresAt) > Date.now()),
+        ),
+      1000,
+    );
+    return () => clearInterval(interval);
+  }, []);
+  async function refreshNow() {
+    const session = generation.current;
+    const next = await api.read(access);
+    if (generation.current === session)
+      setSnapshot((old) =>
+        !old || next.revision >= old.revision ? next : old,
+      );
+  }
+  return {
+    snapshot,
+    status,
+    error,
+    save,
+    undos,
+    refreshNow,
+    clearError: () => setError(""),
+  };
 }

@@ -39,7 +39,9 @@ async function rpc(name: string, params: unknown[]) {
 }
 before(async () => {
   db = new PGlite();
-  await db.exec("create role anon; create role authenticated;");
+  await db.exec(
+    "create role anon; create role authenticated; create role service_role;",
+  );
   await db.exec(
     await readFile(new URL("../supabase/schema.sql", import.meta.url), "utf8"),
   );
@@ -48,6 +50,355 @@ before(async () => {
 after(async () => {
   await db?.close();
 });
+
+describe(
+  "detalhes, lote, restauração e anexos privados",
+  { concurrency: false },
+  () => {
+    it("migra uma instalação anterior e mantém as mesmas funções do schema de produção", async () => {
+      const legacy = new PGlite();
+      try {
+        await legacy.exec(
+          "create role anon; create role authenticated; create role service_role;",
+        );
+        await legacy.exec(
+          await readFile(
+            new URL("./fixtures/schema-before-details.sql", import.meta.url),
+            "utf8",
+          ),
+        );
+        await legacy.query("select public.pro_create($1,$2,$3,$4)", [
+          id,
+          admin,
+          edit,
+          JSON.stringify(document),
+        ]);
+        const before = await legacy.query<{ result: Snapshot }>(
+          "select public.pro_read($1,$2) as result",
+          [id, edit],
+        );
+        await legacy.exec(
+          await readFile(
+            new URL(
+              "../supabase/migrations/20261009_002_item_details.sql",
+              import.meta.url,
+            ),
+            "utf8",
+          ),
+        );
+        const after = await legacy.query<{ result: Snapshot }>(
+          "select public.pro_read($1,$2) as result",
+          [id, edit],
+        );
+        assert.deepEqual(
+          after.rows[0].result.document,
+          before.rows[0].result.document,
+        );
+        assert.equal(
+          after.rows[0].result.revision,
+          before.rows[0].result.revision,
+        );
+        assert.equal(
+          after.rows[0].result.updatedAt,
+          before.rows[0].result.updatedAt,
+        );
+        await db.exec("reset role;");
+        try {
+          for (const signature of [
+            "public.pro_apply(uuid,text,jsonb)",
+            "public.pro_file(uuid,text,text,jsonb)",
+            "public.pro_file_cleanup(uuid[])",
+            "public.pro_manage(uuid,text,text,text)",
+            "checklist_private.valid_document(jsonb)",
+            "checklist_private.snapshot(checklist_private.checklists,text)",
+          ]) {
+            const query =
+              "select pg_get_functiondef($1::regprocedure) as definition";
+            assert.deepEqual(
+              (await legacy.query(query, [signature])).rows,
+              (await db.query(query, [signature])).rows,
+            );
+          }
+        } finally {
+          await db.exec("set role anon;");
+        }
+        await legacy.exec("set role anon;");
+        await assert.rejects(
+          legacy.query("select public.pro_file($1,$2,'download','{}')", [
+            id,
+            edit,
+          ]),
+          /permission denied/,
+        );
+      } finally {
+        await legacy.close();
+      }
+    });
+    const key = "32345678-1234-1234-1234-123456789abc";
+    const file = "42345678-1234-1234-1234-123456789abc";
+    async function service(action: string, info: object) {
+      await db.exec("reset role; set role service_role;");
+      try {
+        return await rpc("pro_file", [key, edit, action, info]);
+      } finally {
+        await db.exec("reset role; set role anon;");
+      }
+    }
+    it("mantém documentos antigos e aplica prioridade com conflito por campo", async () => {
+      await rpc("pro_create", [key, admin, edit, document]);
+      const op = {
+        type: "update_task",
+        sectionId: "s1",
+        taskId: "t1",
+        patch: { priority: "high" },
+        expected: { priority: "none" },
+      };
+      const result = await rpc("pro_apply", [key, edit, op]);
+      assert.equal(result.document.sections[0].tasks[0].priority, "high");
+      await assert.rejects(rpc("pro_apply", [key, edit, op]), /CONFLICT/);
+      await assert.rejects(
+        rpc("pro_apply", [
+          key,
+          edit,
+          {
+            ...op,
+            patch: { priority: "urgent" },
+            expected: { priority: "high" },
+          },
+        ]),
+        /INVALID_DOCUMENT/,
+      );
+    });
+    it("salva listas em lote e reverte todo o lote quando um ID é duplicado", async () => {
+      const task = {
+        id: "batch1",
+        text: "Item colado",
+        done: false,
+        comment: "",
+      };
+      await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "add_tasks",
+          sectionId: "s1",
+          tasks: [task, { ...task, id: "batch2" }],
+        },
+      ]);
+      const before = await rpc("pro_read", [key, edit]);
+      await assert.rejects(
+        rpc("pro_apply", [
+          key,
+          edit,
+          {
+            type: "add_tasks",
+            sectionId: "s1",
+            tasks: [{ ...task, id: "not-added" }, task],
+          },
+        ]),
+        /CONFLICT/,
+      );
+      assert.deepEqual(await rpc("pro_read", [key, edit]), before);
+    });
+    it("nega RPC de arquivos ao navegador e mantém uploads pendentes fora da leitura", async () => {
+      await assert.rejects(
+        rpc("pro_file", [key, edit, "reserve", {}]),
+        /permission denied/,
+      );
+      await assert.rejects(
+        rpc("pro_file_cleanup", [null]),
+        /permission denied/,
+      );
+      await service("reserve", {
+        id: file,
+        sectionId: "s1",
+        taskId: "t1",
+        name: "Foto.png",
+        size: 100,
+        mime: "image/png",
+      });
+      assert.deepEqual((await rpc("pro_read", [key, edit])).attachments, []);
+      await service("commit", { id: file });
+      assert.equal(
+        (await rpc("pro_read", [key, edit])).attachments?.[0].name,
+        "Foto.png",
+      );
+      await assert.rejects(
+        service("reserve", {
+          id: "52345678-1234-1234-1234-123456789abc",
+          sectionId: "s1",
+          taskId: "t1",
+          name: "file.html",
+          size: 100,
+          mime: "text/html",
+        }),
+        /INVALID_FILE/,
+      );
+    });
+    it("anexos acompanham o item ao mover entre seções", async () => {
+      await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "add_section",
+          section: { id: "destination", title: "Destino", tasks: [] },
+        },
+      ]);
+      const snapshot = await rpc("pro_read", [key, edit]);
+      const ids = snapshot.document.sections[0].tasks.map((task) => task.id);
+      const moved = await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "move_task",
+          sectionId: "s1",
+          taskId: "t1",
+          toSectionId: "destination",
+          beforeId: null,
+          expectedSourceOrder: ids,
+          expectedTargetOrder: [],
+        },
+      ]);
+      assert.equal(moved.attachments?.[0].sectionId, "destination");
+      await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "move_task",
+          sectionId: "destination",
+          taskId: "t1",
+          toSectionId: "s1",
+          beforeId: ids[1],
+          expectedSourceOrder: ["t1"],
+          expectedTargetOrder: ids.slice(1),
+        },
+      ]);
+      assert.equal(
+        (await rpc("pro_read", [key, edit])).attachments?.[0].sectionId,
+        "s1",
+      );
+    });
+    it("desfaz exclusão preservando prioridade, comentário e anexos sem reverter outros itens", async () => {
+      const before = await rpc("pro_read", [key, edit]);
+      const deleted = await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "delete_task",
+          sectionId: "s1",
+          taskId: "t1",
+          expected: before.document.sections[0].tasks[0],
+        },
+      ]);
+      assert.ok(deleted.undo?.id);
+      assert.deepEqual(deleted.attachments, []);
+      await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "update_task",
+          sectionId: "s1",
+          taskId: "t2",
+          patch: { comment: "Edição independente" },
+          expected: { comment: "" },
+        },
+      ]);
+      const restored = await rpc("pro_apply", [
+        key,
+        edit,
+        { type: "restore", undoId: deleted.undo.id },
+      ]);
+      assert.equal(restored.document.sections[0].tasks[0].priority, "high");
+      assert.equal(
+        restored.document.sections[0].tasks[1].comment,
+        "Edição independente",
+      );
+      assert.equal(restored.attachments?.[0].id, file);
+      await assert.rejects(
+        rpc("pro_apply", [
+          key,
+          edit,
+          { type: "restore", undoId: deleted.undo.id },
+        ]),
+        /UNDO_EXPIRED/,
+      );
+    });
+    it("restaura seções e impede restauração expirada", async () => {
+      const before = await rpc("pro_read", [key, edit]);
+      const deleted = await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "delete_section",
+          sectionId: "s1",
+          expected: before.document.sections[0],
+        },
+      ]);
+      const restored = await rpc("pro_apply", [
+        key,
+        edit,
+        { type: "restore", undoId: deleted.undo!.id },
+      ]);
+      assert.deepEqual(restored.document, before.document);
+      assert.deepEqual(restored.attachments, before.attachments);
+      const gone = await rpc("pro_apply", [
+        key,
+        edit,
+        {
+          type: "delete_task",
+          sectionId: "s1",
+          taskId: "t1",
+          expected: restored.document.sections[0].tasks[0],
+        },
+      ]);
+      await db.exec("reset role;");
+      await db.query(
+        "update checklist_private.trash set expires_at=clock_timestamp()-interval '1 second' where id=$1",
+        [gone.undo!.id],
+      );
+      await db.exec("set role anon;");
+      await assert.rejects(
+        rpc("pro_apply", [
+          key,
+          edit,
+          { type: "restore", undoId: gone.undo!.id },
+        ]),
+        /UNDO_EXPIRED/,
+      );
+    });
+    it("limita reservas concorrentes de arquivos a cinco por item", async () => {
+      for (let i = 0; i < 5; i++)
+        await service("reserve", {
+          id: `62345678-1234-1234-1234-123456789ab${i}`,
+          sectionId: "s1",
+          taskId: "t2",
+          name: "Doc.pdf",
+          size: 100,
+          mime: "application/pdf",
+        });
+      await assert.rejects(
+        service("reserve", {
+          id: "62345678-1234-1234-1234-123456789ab5",
+          sectionId: "s1",
+          taskId: "t2",
+          name: "Doc.pdf",
+          size: 100,
+          mime: "application/pdf",
+        }),
+        /FILE_LIMIT/,
+      );
+      await db.exec("reset role; set role service_role;");
+      try {
+        await assert.rejects(
+          rpc("pro_file", [key, "d".repeat(64), "download", { id: file }]),
+          /ACCESS_DENIED/,
+        );
+      } finally {
+        await db.exec("reset role; set role anon;");
+      }
+    });
+  },
+);
 
 describe(
   "API de colaboração real em PostgreSQL",
@@ -81,7 +432,7 @@ describe(
         /ACCESS_DENIED/,
       );
     });
-    it("preserva alterações independentes na mesma atividade", async () => {
+    it("preserva alterações independentes no mesmo item", async () => {
       await rpc("pro_apply", [
         id,
         edit,
@@ -130,7 +481,7 @@ describe(
         "Organizar fiscais",
       );
     });
-    it("impede exclusão de uma etapa que mudou", async () => {
+    it("impede exclusão de uma seção que mudou", async () => {
       await assert.rejects(
         rpc("pro_apply", [
           id,
@@ -254,12 +605,12 @@ describe("ordenação e atualização do banco existente", () => {
         tasks: [
           {
             id: "a",
-            text: "Atividade A",
+            text: "Item A",
             done: true,
             comment: "Comentário original",
           },
-          { id: "b", text: "Atividade B", done: false, comment: "" },
-          { id: "c", text: "Atividade C", done: false, comment: "" },
+          { id: "b", text: "Item B", done: false, comment: "" },
+          { id: "c", text: "Item C", done: false, comment: "" },
         ],
       },
       { id: "empty", title: "Vazia", tasks: [] },
@@ -271,7 +622,7 @@ describe("ordenação e atualização do banco existente", () => {
     await rpc("pro_create", [key, admin, edit, initial]);
     return key;
   }
-  it("reordena etapas sem modificar o conteúdo", async () => {
+  it("reordena seções sem modificar o conteúdo", async () => {
     const key = await setup();
     const moved = await rpc("pro_apply", [
       key,
@@ -300,7 +651,7 @@ describe("ordenação e atualização do banco existente", () => {
     ]);
     assert.deepEqual(end.document, initial);
   });
-  it("reordena atividades e preserva marcações e comentários", async () => {
+  it("reordena itens e preserva marcações e comentários", async () => {
     const key = await setup();
     const moved = await rpc("pro_apply", [
       key,
@@ -324,7 +675,7 @@ describe("ordenação e atualização do banco existente", () => {
       initial.sections[0].tasks[0],
     );
   });
-  it("move entre etapas vazias e preserva uma edição feita durante o arraste", async () => {
+  it("move entre seções vazias e preserva uma edição feita durante o arraste", async () => {
     const key = await setup();
     await rpc("pro_apply", [
       key,
@@ -404,7 +755,7 @@ describe("ordenação e atualização do banco existente", () => {
       /ACCESS_DENIED/,
     );
   });
-  it("não aceita IDs duplicados na etapa de destino", async () => {
+  it("não aceita IDs duplicados na seção de destino", async () => {
     const key = await setup();
     await rpc("pro_apply", [
       key,
@@ -447,7 +798,18 @@ describe("ordenação e atualização do banco existente", () => {
       ),
       "utf8",
     );
-    await db.exec("reset role;" + migration + "set role anon;");
+    await db.exec(
+      "reset role;" +
+        migration +
+        (await readFile(
+          new URL(
+            "../supabase/migrations/20261009_002_item_details.sql",
+            import.meta.url,
+          ),
+          "utf8",
+        )) +
+        "set role anon;",
+    );
     const afterDefinition = await db.query<{ definition: string }>(
       "select pg_get_functiondef('public.pro_apply(uuid,text,jsonb)'::regprocedure) as definition",
     );

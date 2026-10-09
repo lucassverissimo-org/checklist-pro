@@ -28,16 +28,20 @@ import {
   GripVertical,
   MessageSquare,
   Pencil,
-  Trash2,
+  Flag,
 } from "lucide-react";
 import {
   type Checklist,
   type Operation,
   type Section,
   type Task,
+  type Access,
+  type Attachment,
   uniqueId,
 } from "./model";
 import { QuickAdd } from "./QuickAdd";
+import { InlineDelete, InlineEditor } from "./InlineActions";
+import { ItemDetails, priorityLabels } from "./ItemDetails";
 
 type DragItem =
   | { kind: "section"; sectionId: string }
@@ -47,6 +51,9 @@ const taskKey = (sectionId: string, taskId: string) =>
   `task:${JSON.stringify([sectionId, taskId])}`;
 type VisibleSection = Section & { visible: Task[] };
 type Props = {
+  access: Access;
+  attachments: Attachment[];
+  onRefresh: () => Promise<void>;
   document: Checklist;
   sections: VisibleSection[];
   closed: string[];
@@ -54,11 +61,6 @@ type Props = {
   filtered: boolean;
   onClosed: React.Dispatch<React.SetStateAction<string[]>>;
   onSave: (operation: Operation) => Promise<boolean>;
-  onEditSection: (section: Section) => void;
-  onDeleteSection: (section: Section) => void;
-  onEditTask: (section: Section, task: Task) => void;
-  onComment: (section: Section, task: Task) => void;
-  onDeleteTask: (section: Section, task: Task) => void;
 };
 
 export function ChecklistSections(props: Props) {
@@ -176,8 +178,8 @@ export function ChecklistSections(props: Props) {
     <>
       <p className="ordering-help">
         {props.filtered
-          ? "Limpe a pesquisa e o filtro de pendências para arrastar os itens."
-          : "Arraste pelo ícone de pontos para ordenar. Atividades também podem mudar de etapa."}
+          ? "Limpe a pesquisa e os filtros para arrastar os itens."
+          : "Arraste pelo ícone de pontos para ordenar. Itens também podem mudar de seção."}
       </p>
       <DndContext
         sensors={sensors}
@@ -241,6 +243,7 @@ function SortableSection(
   },
 ) {
   const { section, index } = props;
+  const [editing, setEditing] = React.useState(false);
   const disabled = props.disabled || props.filtered;
   const sortable = useSortable({
     id: sectionKey(section.id),
@@ -274,8 +277,8 @@ function SortableSection(
           {...sortable.attributes}
           {...sortable.listeners}
           className="iconbtn drag-handle"
-          aria-label={`Mover etapa ${section.title}`}
-          title="Arrastar etapa"
+          aria-label={`Mover seção ${section.title}`}
+          title="Arrastar seção"
           disabled={disabled}
         >
           <GripVertical size={17} />
@@ -303,22 +306,45 @@ function SortableSection(
           </span>
           <button
             className="iconbtn"
-            aria-label={`Renomear etapa ${section.title}`}
+            aria-label={`Renomear seção ${section.title}`}
             disabled={props.disabled}
-            onClick={() => props.onEditSection(original)}
+            onClick={() => setEditing(true)}
           >
             <Pencil size={15} />
           </button>
-          <button
-            className="iconbtn danger"
-            aria-label={`Excluir etapa ${section.title}`}
+          <InlineDelete
+            label={`seção ${section.title}`}
             disabled={props.disabled}
-            onClick={() => props.onDeleteSection(original)}
-          >
-            <Trash2 size={15} />
-          </button>
+            snapshot={original}
+            onDelete={(expected) =>
+              props.onSave({
+                type: "delete_section",
+                sectionId: section.id,
+                expected,
+              })
+            }
+          />
         </div>
       </div>
+      {editing && (
+        <InlineEditor
+          label="Nome da seção"
+          current={section.title}
+          disabled={props.disabled}
+          multiline={false}
+          allowEmpty={false}
+          limit={120}
+          onClose={() => setEditing(false)}
+          onSave={(title, expected) =>
+            props.onSave({
+              type: "update_section",
+              sectionId: section.id,
+              title,
+              expected,
+            })
+          }
+        />
+      )}
       {isOpen && (
         <div className="section-body">
           <SortableContext
@@ -335,10 +361,22 @@ function SortableSection(
             ))}
           </SortableContext>
           <QuickAdd
-            label={`Nova atividade em ${section.title}`}
-            placeholder="Adicionar atividade…"
+            label={`Novo item em ${section.title}`}
+            placeholder="Adicionar item…"
             maxLength={2000}
             disabled={props.disabled}
+            onAddMany={(values) =>
+              props.onSave({
+                type: "add_tasks",
+                sectionId: section.id,
+                tasks: values.map((text) => ({
+                  id: uniqueId(),
+                  text,
+                  done: false,
+                  comment: "",
+                })),
+              })
+            }
             onAdd={(text) =>
               props.onSave({
                 type: "add_task",
@@ -351,7 +389,7 @@ function SortableSection(
       )}
       {!isOpen && highlight && (
         <p className="collapsed-drop-hint">
-          Solte aqui para mover a atividade para esta etapa.
+          Solte aqui para mover a item para esta seção.
         </p>
       )}
     </article>
@@ -360,10 +398,16 @@ function SortableSection(
 
 function SortableTask(props: Props & { section: Section; task: Task }) {
   const { task, section } = props;
+  const [commentOpen, setCommentOpen] = React.useState(false);
+  const [detailsBusy, setDetailsBusy] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const files = props.attachments.filter(
+    (file) => file.sectionId === section.id && file.taskId === task.id,
+  );
   const sortable = useSortable({
     id: taskKey(section.id, task.id),
     data: { kind: "task", sectionId: section.id, taskId: task.id },
-    disabled: props.disabled || props.filtered,
+    disabled: props.disabled || props.filtered || detailsBusy,
   });
   return (
     <div
@@ -375,67 +419,128 @@ function SortableTask(props: Props & { section: Section; task: Task }) {
         transition: sortable.transition,
       }}
     >
-      <button
-        ref={sortable.setActivatorNodeRef}
-        {...sortable.attributes}
-        {...sortable.listeners}
-        className="iconbtn drag-handle task-drag-handle"
-        aria-label={`Mover atividade: ${task.text}`}
-        title="Arrastar atividade"
-        disabled={props.disabled || props.filtered}
-      >
-        <GripVertical size={16} />
-      </button>
-      <label className="task-label">
-        <input
-          type="checkbox"
-          checked={task.done}
-          disabled={props.disabled}
-          onChange={(event) =>
-            void props.onSave({
+      <div className="task-row">
+        <button
+          ref={sortable.setActivatorNodeRef}
+          {...sortable.attributes}
+          {...sortable.listeners}
+          className="iconbtn drag-handle task-drag-handle"
+          aria-label={`Mover item: ${task.text}`}
+          title="Arrastar item"
+          disabled={props.disabled || props.filtered || detailsBusy}
+        >
+          <GripVertical size={16} />
+        </button>
+        {task.priority && task.priority !== "none" && (
+          <span
+            className={`priority-badge priority-${task.priority}`}
+            role="img"
+            aria-label={`Prioridade ${priorityLabels[task.priority].toLowerCase()}`}
+            title={`Prioridade ${priorityLabels[task.priority]}`}
+          >
+            <Flag size={14} />
+            <small>
+              {task.priority === "high"
+                ? "!"
+                : task.priority === "medium"
+                  ? "2"
+                  : "1"}
+            </small>
+          </span>
+        )}
+        <label className="task-label">
+          <input
+            type="checkbox"
+            checked={task.done}
+            disabled={props.disabled || detailsBusy}
+            onChange={(event) =>
+              void props.onSave({
+                type: "update_task",
+                sectionId: section.id,
+                taskId: task.id,
+                patch: { done: event.target.checked },
+                expected: { done: task.done },
+              })
+            }
+          />
+          <span className="custom-checkbox">
+            <Check size={13} />
+          </span>
+          <span className="task-text">{task.text}</span>
+        </label>
+        <div className="task-actions">
+          <button
+            className={`iconbtn ${task.comment || files.length ? "with-comment" : ""}`}
+            aria-label={`Detalhes do item: ${task.text}`}
+            title="Comentário, prioridade e anexos"
+            disabled={props.disabled || detailsBusy}
+            aria-expanded={commentOpen}
+            onClick={() => setCommentOpen((open) => !open)}
+          >
+            <MessageSquare size={16} />
+            {(task.comment || files.length > 0) && (
+              <span className="comment-dot" />
+            )}
+          </button>
+          <button
+            className="iconbtn"
+            aria-label={`Editar item: ${task.text}`}
+            title="Editar item"
+            disabled={props.disabled || detailsBusy}
+            onClick={() => {
+              setCommentOpen(false);
+              setEditing(true);
+            }}
+          >
+            <Pencil size={15} />
+          </button>
+          <InlineDelete
+            label={`item: ${task.text}`}
+            disabled={props.disabled || detailsBusy}
+            snapshot={task}
+            onDelete={(expected) =>
+              props.onSave({
+                type: "delete_task",
+                sectionId: section.id,
+                taskId: task.id,
+                expected,
+              })
+            }
+          />
+        </div>
+      </div>
+      {editing && (
+        <InlineEditor
+          label="Descrição do item"
+          current={task.text}
+          disabled={props.disabled || detailsBusy}
+          allowEmpty={false}
+          limit={2000}
+          onClose={() => setEditing(false)}
+          onSave={(text, expected) =>
+            props.onSave({
               type: "update_task",
               sectionId: section.id,
               taskId: task.id,
-              patch: { done: event.target.checked },
-              expected: { done: task.done },
+              patch: { text },
+              expected: { text: expected },
             })
           }
         />
-        <span className="custom-checkbox">
-          <Check size={13} />
-        </span>
-        <span className="task-text">{task.text}</span>
-      </label>
-      <div className="task-actions">
-        <button
-          className={`iconbtn ${task.comment ? "with-comment" : ""}`}
-          aria-label={`${task.comment ? "Ver" : "Adicionar"} comentário: ${task.text}`}
-          title={task.comment ? "Ver comentário" : "Adicionar comentário"}
+      )}
+      {commentOpen && (
+        <ItemDetails
+          access={props.access}
+          sectionId={section.id}
+          task={task}
+          files={files}
+          onRefresh={props.onRefresh}
+          onWorking={setDetailsBusy}
           disabled={props.disabled}
-          onClick={() => props.onComment(section, task)}
-        >
-          <MessageSquare size={16} />
-          {task.comment && <span className="comment-dot" />}
-        </button>
-        <button
-          className="iconbtn"
-          aria-label={`Editar atividade: ${task.text}`}
-          title="Editar atividade"
-          disabled={props.disabled}
-          onClick={() => props.onEditTask(section, task)}
-        >
-          <Pencil size={15} />
-        </button>
-        <button
-          className="iconbtn danger"
-          aria-label={`Excluir atividade: ${task.text}`}
-          title="Excluir atividade"
-          disabled={props.disabled}
-          onClick={() => props.onDeleteTask(section, task)}
-        >
-          <Trash2 size={15} />
-        </button>
-      </div>
+          onClose={() => setCommentOpen(false)}
+          onSave={props.onSave}
+        />
+      )}
     </div>
   );
 }

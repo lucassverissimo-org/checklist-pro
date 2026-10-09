@@ -635,11 +635,48 @@ textarea {
 }
 .task {
   padding: 13px 0;
-  display: flex;
+  display: block;
   gap: 10px;
   justify-content: space-between;
   align-items: flex-start;
   border-bottom: 1px solid #f0f3ec;
+}
+.task-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.inline-comment {
+  margin: 12px 0 2px;
+  padding: 14px;
+  background: #f8faf5;
+  border: 1px solid #e1e8db;
+  border-radius: 9px;
+}
+.board-title .inline-comment {
+  flex: 1;
+  min-width: 0;
+}
+.checklist-section > .inline-comment {
+  margin: 0 12px 12px;
+}
+.inline-comment input {
+  width: 100%;
+  font-size: 16px;
+}
+.inline-comment textarea {
+  width: 100%;
+  min-height: 90px;
+  resize: vertical;
+  font-size: 16px;
+}
+.inline-comment-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 10px;
 }
 .task-label {
   cursor: pointer;
@@ -649,6 +686,156 @@ textarea {
   flex: 1;
   min-width: 0;
   padding-top: 5px;
+}
+.priority-badge {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: none;
+  padding-top: 6px;
+}
+.priority-badge small {
+  font-size: 9px;
+  font-weight: 800;
+}
+.priority-high {
+  color: #b3443d;
+}
+.priority-medium {
+  color: #9b6a18;
+}
+.priority-low {
+  color: #487996;
+}
+.item-details,
+.paste-preview {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid #e1e8db;
+  border-radius: 9px;
+  background: #f8faf5;
+}
+.item-details h3 {
+  font-size: 14px;
+  margin: 0 0 14px;
+}
+.item-details textarea,
+.item-details select {
+  width: 100%;
+  font-size: 16px;
+}
+.item-details textarea {
+  min-height: 90px;
+  resize: vertical;
+}
+.item-details .field-label {
+  margin-top: 12px;
+}
+.attachments-panel {
+  border-top: 1px solid #e1e8db;
+  margin-top: 16px;
+  padding-top: 12px;
+}
+.attachments-panel h4 {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+.attachments-panel h4 span {
+  margin-left: auto;
+  font-weight: 400;
+}
+.attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+.attachment-name {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}
+.attachment-name small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+.attachment-upload {
+  position: relative;
+  cursor: pointer;
+}
+.attachment-upload input {
+  position: absolute;
+  opacity: 0;
+  inset: 0;
+  width: 100%;
+  cursor: pointer;
+}
+.attachment-upload:focus-within {
+  outline: 3px solid #9eccb9;
+}
+.attachment-upload.disabled {
+  opacity: 0.5;
+}
+.upload-progress {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  margin-top: 12px;
+}
+.paste-list {
+  display: grid;
+  gap: 6px;
+  max-height: 280px;
+  overflow: auto;
+  margin: 12px 0;
+}
+.paste-list input {
+  width: 100%;
+  min-width: 0;
+  font-size: 16px;
+}
+.paste-preview {
+  font-size: 13px;
+}
+.priority-filter {
+  max-width: 100%;
+  font-size: 12px;
+}
+.priority-filter,
+.item-details select {
+  border: 1px solid #d7e1ce;
+  border-radius: 7px;
+  background: white;
+  color: var(--ink);
+  padding: 9px 10px;
+}
+.undo-stack {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100% - 28px));
+  z-index: 10;
+  display: grid;
+  gap: 7px;
+}
+.undo-toast {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: 9px;
+  background: #193e32;
+  color: white;
+  box-shadow: 0 5px 20px #0002;
+  font-size: 13px;
 }
 .task-label > input {
   position: absolute;
@@ -680,6 +867,7 @@ textarea {
   opacity: 0.6;
 }
 .task-text {
+  white-space: pre-wrap;
   font-size: 13px;
   line-height: 1.65;
   overflow-wrap: anywhere;

@@ -13,7 +13,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "node tests/rpc-server.mjs",
+      command: "node node_modules/tsx/dist/cli.mjs tests/rpc-server.mjs",
       url: "http://127.0.0.1:7788/health",
       timeout: 30000,
     },

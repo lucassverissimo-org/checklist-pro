@@ -46,127 +46,6 @@ export function Modal({
   );
 }
 
-export function Editor({
-  title,
-  label,
-  initial,
-  current,
-  multiline,
-  allowEmpty = false,
-  limit,
-  error,
-  busy,
-  context,
-  onClose,
-  onSave,
-}: {
-  title: string;
-  label: string;
-  initial: string;
-  current?: string;
-  multiline?: boolean;
-  allowEmpty?: boolean;
-  limit: number;
-  error: string;
-  busy: boolean;
-  context?: string;
-  onClose: () => void;
-  onSave: (value: string, expected: string) => Promise<boolean>;
-}) {
-  const [value, setValue] = React.useState(initial);
-  const [base, setBase] = React.useState(initial);
-  const id = React.useId();
-  const changed = current !== undefined && current !== base;
-  return (
-    <Modal title={title} onClose={onClose} busy={busy}>
-      <form
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (!changed && (await onSave(value.trim(), base))) onClose();
-        }}
-      >
-        {context && <p className="editor-context">{context}</p>}
-        <label htmlFor={id} className="field-label">
-          {label}
-        </label>
-        {multiline ? (
-          <textarea
-            id={id}
-            autoFocus
-            rows={5}
-            maxLength={limit}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            disabled={busy}
-          />
-        ) : (
-          <input
-            id={id}
-            autoFocus
-            maxLength={limit}
-            value={value}
-            onChange={(e) => setValue(e.target.value)}
-            disabled={busy}
-          />
-        )}
-        <p className="field-hint">
-          {allowEmpty
-            ? "Você pode deixar vazio para remover o comentário."
-            : "Um nome claro ajuda todo mundo a se organizar."}
-        </p>
-        {changed && (
-          <div className="notice" role="alert">
-            <strong>Outra pessoa alterou este texto.</strong>
-            <p className="current-version">
-              Versão atual: {current || "(sem comentário)"}
-            </p>
-            <div className="button-row">
-              <button
-                type="button"
-                className="btn small"
-                onClick={() => {
-                  setValue(current);
-                  setBase(current);
-                }}
-              >
-                Usar versão atual
-              </button>
-              <button
-                type="button"
-                className="btn small"
-                onClick={() => setBase(current)}
-              >
-                Manter meu texto
-              </button>
-            </div>
-          </div>
-        )}
-        {error && (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        )}
-        <div className="modal-actions">
-          <button
-            type="button"
-            className="btn"
-            disabled={busy}
-            onClick={onClose}
-          >
-            Cancelar
-          </button>
-          <button
-            className="btn primary"
-            disabled={busy || changed || (!allowEmpty && !value.trim())}
-          >
-            {busy ? "Salvando…" : "Salvar"}
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
 export function Share({
   editLink,
   adminLink,
@@ -229,7 +108,7 @@ export function Share({
       <p className="muted">
         {admin
           ? "Guarde este link com você. Ele permite renovar o link de edição e excluir o checklist inteiro."
-          : "Quem tiver este link poderá editar, concluir atividades e acompanhar as alterações. Sem cadastro."}
+          : "Quem tiver este link poderá editar, concluir itens e acompanhar as alterações. Sem cadastro."}
       </p>
       {local && (
         <p className="notice">

@@ -1,5 +1,365 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
 
+async function pasteList(input: Locator, text: string) {
+  await input.evaluate((element, text) => {
+    const clipboard = new DataTransfer();
+    clipboard.setData("text/plain", text);
+    element.dispatchEvent(
+      new ClipboardEvent("paste", {
+        clipboardData: clipboard,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+  }, text);
+}
+
+test("lista colada, prioridade, anexos e desfazer sincronizam entre navegadores", async ({
+  page,
+  browser,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Nome do checklist").fill("Detalhes completos");
+  await page
+    .getByRole("button", { name: "Criar checklist", exact: true })
+    .click();
+  const input = page.getByLabel("Novo item em Antes de começar", {
+    exact: true,
+  });
+  await pasteList(
+    input,
+    "1. Comprar material\n2) Conferir sala; • Avisar equipe",
+  );
+  await expect(page.getByText("Detectamos 3 possíveis itens.")).toBeVisible();
+  await expect(page.locator(".task")).toHaveCount(3);
+  await page.getByLabel("Item colado 2").fill("Conferir todas as salas");
+  await page
+    .getByRole("button", { name: "Adicionar 3 itens", exact: true })
+    .click();
+  await expect(page.locator(".task")).toHaveCount(6);
+  await expect(input).toBeFocused();
+  await page.getByRole("button", { name: "Compartilhar", exact: true }).click();
+  const link = await page.getByLabel("Link para sua equipe").inputValue();
+  await page.getByRole("button", { name: "Fechar", exact: true }).click();
+  const context = await browser.newContext();
+  const second = await context.newPage();
+  await second.goto(link);
+  await page
+    .getByRole("button", {
+      name: "Detalhes do item: Comprar material",
+      exact: true,
+    })
+    .click();
+  await page.getByLabel("Comentário do item").fill("Documento de referência");
+  await page.getByLabel("Prioridade", { exact: true }).selectOption("high");
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect(
+    page.getByRole("img", { name: "Prioridade alta", exact: true }),
+  ).toBeVisible();
+  await expect(
+    second.getByRole("img", { name: "Prioridade alta", exact: true }),
+  ).toBeVisible({ timeout: 10000 });
+  await page.getByLabel("Filtrar por prioridade").selectOption("high");
+  await expect(page.locator(".task")).toHaveCount(1);
+  await expect(
+    page.getByRole("button", {
+      name: "Mover item: Comprar material",
+      exact: true,
+    }),
+  ).toBeDisabled();
+  await page.getByLabel("Filtrar por prioridade").selectOption("all");
+  await page
+    .getByRole("button", {
+      name: "Detalhes do item: Comprar material",
+      exact: true,
+    })
+    .click();
+  await page.getByLabel("Adicionar anexo", { exact: true }).setInputFiles({
+    name: "referencia.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\nreference\n%%EOF"),
+  });
+  await expect(
+    page.getByRole("button", { name: "Baixar referencia.pdf", exact: true }),
+  ).toBeVisible();
+  await second
+    .getByRole("button", {
+      name: "Detalhes do item: Comprar material",
+      exact: true,
+    })
+    .click();
+  await expect(
+    second.getByRole("button", { name: "Baixar referencia.pdf", exact: true }),
+  ).toBeVisible({ timeout: 10000 });
+  const downloaded = second.waitForEvent("download");
+  await second
+    .getByRole("button", { name: "Baixar referencia.pdf", exact: true })
+    .click();
+  expect((await downloaded).suggestedFilename()).toBe("referencia.pdf");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({
+    path: "test-results/item-details-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Excluir item: Comprar material",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Desfazer", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".task")).toHaveCount(5);
+  await page.getByRole("button", { name: "Desfazer", exact: true }).click();
+  await expect(page.locator(".task")).toHaveCount(6);
+  await page
+    .getByRole("button", {
+      name: "Detalhes do item: Comprar material",
+      exact: true,
+    })
+    .click();
+  await expect(page.getByLabel("Comentário do item")).toHaveValue(
+    "Documento de referência",
+  );
+  await expect(
+    page.getByRole("button", { name: "Baixar referencia.pdf", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Excluir anexo referencia.pdf", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Baixar referencia.pdf", exact: true }),
+  ).toHaveCount(0);
+  await context.close();
+});
+
+test("demonstração preserva anexos locais e permite manter lista como um item", async ({
+  page,
+}) => {
+  await page.goto("http://localhost:5175");
+  await page.getByLabel("Nome do checklist").fill("Arquivos locais");
+  await page
+    .getByRole("button", { name: "Experimentar checklist", exact: true })
+    .click();
+  const input = page.getByLabel("Novo item em Antes de começar", {
+    exact: true,
+  });
+  await pasteList(input, "Um texto; com duas partes");
+  await page
+    .getByRole("button", { name: "Manter como um item", exact: true })
+    .click();
+  await input.press("Enter");
+  await expect(page.locator(".task")).toHaveCount(4);
+  await page
+    .getByRole("button", {
+      name: "Detalhes do item: Um texto; com duas partes",
+      exact: true,
+    })
+    .click();
+  await page.getByLabel("Adicionar anexo", { exact: true }).setInputFiles({
+    name: "local.pdf",
+    mimeType: "application/pdf",
+    buffer: Buffer.from("%PDF-1.4\nlocal"),
+  });
+  await expect(
+    page.getByRole("button", { name: "Baixar local.pdf", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Excluir item: Um texto; com duas partes",
+      exact: true,
+    })
+    .click();
+  await page.getByRole("button", { name: "Desfazer", exact: true }).click();
+  await page.reload();
+  await page
+    .getByRole("button", {
+      name: "Detalhes do item: Um texto; com duas partes",
+      exact: true,
+    })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Baixar local.pdf", exact: true }),
+  ).toBeVisible();
+  const download = page.waitForEvent("download");
+  await page
+    .getByRole("button", { name: "Baixar local.pdf", exact: true })
+    .click();
+  expect((await download).suggestedFilename()).toBe("local.pdf");
+});
+
+test("edita checklist, seção e item sem modal no computador e celular", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Nome do checklist").fill("Edição na página");
+  await page
+    .getByRole("button", { name: "Criar checklist", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Renomear checklist", exact: true })
+    .click();
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
+  await page.getByLabel("Nome do checklist").fill("Nome atualizado");
+  await page.getByLabel("Nome do checklist").press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "Nome atualizado", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", {
+      name: "Renomear seção Antes de começar",
+      exact: true,
+    })
+    .click();
+  await page.getByLabel("Nome da seção").fill("Preparação");
+  await page.getByLabel("Nome da seção").press("Enter");
+  await expect(
+    page.getByRole("heading", { name: "Preparação", exact: true }),
+  ).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole("button", {
+      name: "Editar item: Definir o que precisa ser feito",
+      exact: true,
+    })
+    .click();
+  await page.getByLabel("Descrição do item").fill("Rascunho descartado");
+  await page.getByLabel("Descrição do item").press("Escape");
+  await expect(page.getByLabel("Descrição do item")).toHaveCount(0);
+  await page
+    .getByRole("button", {
+      name: "Editar item: Definir o que precisa ser feito",
+      exact: true,
+    })
+    .click();
+  await page
+    .getByLabel("Descrição do item")
+    .fill("Primeira linha\nSegunda linha");
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
+  await page.screenshot({
+    path: "test-results/edit-inline-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect(page.locator(".task-text").first()).toHaveText(
+    "Primeira linha\nSegunda linha",
+  );
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Nome atualizado", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Preparação", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator(".task-text").first()).toHaveText(
+    "Primeira linha\nSegunda linha",
+  );
+  const dialogs: string[] = [];
+  page.on("dialog", (dialog) => {
+    dialogs.push(dialog.message());
+    void dialog.dismiss();
+  });
+  await page
+    .getByRole("button", { name: "Administração", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Excluir checklist", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Criar checklist", exact: true }),
+  ).toBeVisible();
+  expect(dialogs).toEqual([]);
+});
+
+test("comentário inline preserva conflito e exclusão direta no celular", async ({
+  page,
+  browser,
+}) => {
+  await page.goto("/");
+  await page.getByLabel("Nome do checklist").fill("Edição sem modal");
+  await page
+    .getByRole("button", { name: "Criar checklist", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Compartilhar", exact: true }).click();
+  const link = await page.getByLabel("Link para sua equipe").inputValue();
+  await page.getByRole("button", { name: "Fechar", exact: true }).click();
+  const context = await browser.newContext();
+  const second = await context.newPage();
+  await second.goto(link);
+  const comment = "Detalhes do item: Definir o que precisa ser feito";
+  await page.getByRole("button", { name: comment, exact: true }).click();
+  await second.getByRole("button", { name: comment, exact: true }).click();
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
+  await page.getByLabel("Comentário do item").fill("Comentário da equipe");
+  await second.getByLabel("Comentário do item").fill("Meu rascunho");
+  await page.getByRole("button", { name: "Salvar", exact: true }).click();
+  await expect(
+    second.getByText("Outra pessoa alterou este comentário."),
+  ).toBeVisible({ timeout: 10000 });
+  await expect(second.getByLabel("Comentário do item")).toHaveValue(
+    "Meu rascunho",
+  );
+  await expect(
+    second.getByRole("button", { name: "Salvar", exact: true }),
+  ).toBeDisabled();
+  await second
+    .getByRole("button", { name: "Usar versão atual", exact: true })
+    .click();
+  await expect(second.getByLabel("Comentário do item")).toHaveValue(
+    "Comentário da equipe",
+  );
+  await second.getByRole("button", { name: "Cancelar", exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole("button", {
+      name: "Detalhes do item: Definir o que precisa ser feito",
+      exact: true,
+    })
+    .click();
+  await page.screenshot({
+    path: "test-results/inline-comment-mobile.png",
+    fullPage: true,
+  });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.getByRole("button", { name: "Cancelar", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Excluir item: Definir o que precisa ser feito",
+      exact: true,
+    })
+    .click();
+  await expect(page.locator("dialog[open]")).toHaveCount(0);
+  await expect(page.locator(".task")).toHaveCount(2);
+  await expect(second.locator(".task")).toHaveCount(2, { timeout: 10000 });
+  await page
+    .getByRole("button", {
+      name: "Excluir seção Antes de começar",
+      exact: true,
+    })
+    .click();
+  await expect(page.locator(".checklist-section")).toHaveCount(1);
+  await page.reload();
+  await expect(page.locator(".checklist-section")).toHaveCount(1);
+  await context.close();
+});
+
 async function drag(page: Page, handle: Locator, target: Locator) {
   await handle.scrollIntoViewIfNeeded();
   const start = await handle.boundingBox();
@@ -60,42 +420,40 @@ test("colaboração em dois navegadores, comentário, conflito e revogação", a
   });
   await page
     .getByRole("button", {
-      name: "Adicionar comentário: Definir o que precisa ser feito",
+      name: "Detalhes do item: Definir o que precisa ser feito",
       exact: true,
     })
     .click();
-  await page.getByLabel("Seu comentário").fill("Confirmado com a equipe ✅");
+  await page
+    .getByLabel("Comentário do item")
+    .fill("Confirmado com a equipe ✅");
   await page.getByRole("button", { name: "Salvar", exact: true }).click();
   await expect(
     second.getByRole("button", {
-      name: "Ver comentário: Definir o que precisa ser feito",
+      name: "Detalhes do item: Definir o que precisa ser feito",
       exact: true,
     }),
   ).toBeVisible({ timeout: 10000 });
   await second
     .getByRole("button", {
-      name: "Ver comentário: Definir o que precisa ser feito",
+      name: "Detalhes do item: Definir o que precisa ser feito",
       exact: true,
     })
     .click();
-  await expect(second.getByLabel("Seu comentário")).toHaveValue(
+  await expect(second.getByLabel("Comentário do item")).toHaveValue(
     "Confirmado com a equipe ✅",
   );
   await second.keyboard.press("Escape");
-  const editButton = "Editar atividade: Combinar os detalhes com a equipe";
+  const editButton = "Editar item: Combinar os detalhes com a equipe";
   await page.getByRole("button", { name: editButton, exact: true }).click();
   await second.getByRole("button", { name: editButton, exact: true }).click();
-  await page
-    .getByLabel("Descrição da atividade")
-    .fill("Combinar com os fiscais");
-  await second
-    .getByLabel("Descrição da atividade")
-    .fill("Meu rascunho concorrente");
+  await page.getByLabel("Descrição do item").fill("Combinar com os fiscais");
+  await second.getByLabel("Descrição do item").fill("Meu rascunho concorrente");
   await page.getByRole("button", { name: "Salvar", exact: true }).click();
   await expect(
     second.getByText("Outra pessoa alterou este texto."),
   ).toBeVisible({ timeout: 10000 });
-  await expect(second.getByLabel("Descrição da atividade")).toHaveValue(
+  await expect(second.getByLabel("Descrição do item")).toHaveValue(
     "Meu rascunho concorrente",
   );
   await expect(
@@ -104,7 +462,7 @@ test("colaboração em dois navegadores, comentário, conflito e revogação", a
   await second
     .getByRole("button", { name: "Usar versão atual", exact: true })
     .click();
-  await expect(second.getByLabel("Descrição da atividade")).toHaveValue(
+  await expect(second.getByLabel("Descrição do item")).toHaveValue(
     "Combinar com os fiscais",
   );
   await second.getByRole("button", { name: "Cancelar", exact: true }).click();
@@ -168,12 +526,12 @@ test("demonstração local persiste e permite criar itens no celular", async ({
   await page
     .getByRole("button", { name: "Experimentar checklist", exact: true })
     .click();
-  await page.getByLabel("Nova etapa", { exact: true }).fill("Preparação");
-  await page.getByLabel("Nova etapa", { exact: true }).press("Enter");
+  await page.getByLabel("Nova seção", { exact: true }).fill("Preparação");
+  await page.getByLabel("Nova seção", { exact: true }).press("Enter");
   await expect(
     page.getByRole("heading", { name: "Preparação", exact: true }),
   ).toBeVisible();
-  const activity = page.getByLabel("Nova atividade em Preparação", {
+  const activity = page.getByLabel("Novo item em Preparação", {
     exact: true,
   });
   await expect(activity).toBeFocused();
@@ -196,7 +554,7 @@ test("demonstração local persiste e permite criar itens no celular", async ({
   ).toBe(true);
 });
 
-test("inclusão contínua, arraste entre etapas e ordem compartilhada", async ({
+test("inclusão contínua, arraste entre seções e ordem compartilhada", async ({
   page,
   browser,
 }) => {
@@ -211,19 +569,19 @@ test("inclusão contínua, arraste entre etapas e ordem compartilhada", async ({
       exact: true,
     }),
   ).toBeVisible();
-  const add = page.getByLabel("Nova atividade em Antes de começar", {
+  const add = page.getByLabel("Novo item em Antes de começar", {
     exact: true,
   });
-  await add.fill("Atividade extra A");
+  await add.fill("Item extra A");
   await add.press("Enter");
   await expect(add).toHaveValue("");
   await expect(add).toBeFocused();
-  await add.fill("Atividade extra B");
+  await add.fill("Item extra B");
   await add.press("Enter");
   await expect(add).toHaveValue("");
   await expect(add).toBeFocused();
-  await page.getByLabel("Nova etapa", { exact: true }).fill("Destino vazio");
-  await page.getByLabel("Nova etapa", { exact: true }).press("Enter");
+  await page.getByLabel("Nova seção", { exact: true }).fill("Destino vazio");
+  await page.getByLabel("Nova seção", { exact: true }).press("Enter");
   await expect(
     page.getByRole("heading", { name: "Destino vazio", exact: true }),
   ).toBeVisible();
@@ -242,37 +600,33 @@ test("inclusão contínua, arraste entre etapas e ordem compartilhada", async ({
   });
   await page
     .getByRole("button", {
-      name: "Adicionar comentário: Atividade extra A",
+      name: "Detalhes do item: Item extra A",
       exact: true,
     })
     .click();
-  await page.getByLabel("Seu comentário").fill("Levar junto ao mover");
+  await page.getByLabel("Comentário do item").fill("Levar junto ao mover");
   await page.getByRole("button", { name: "Salvar", exact: true }).click();
   await drag(
     page,
     page.getByRole("button", {
-      name: "Mover atividade: Atividade extra B",
+      name: "Mover item: Item extra B",
       exact: true,
     }),
     first.locator(".task").first(),
   );
-  await expect(first.locator(".task-text").first()).toHaveText(
-    "Atividade extra B",
-  );
+  await expect(first.locator(".task-text").first()).toHaveText("Item extra B");
   await drag(
     page,
     page.getByRole("button", {
-      name: "Mover atividade: Atividade extra A",
+      name: "Mover item: Item extra A",
       exact: true,
     }),
     destination.locator(".quick-add"),
   );
-  await expect(destination.locator(".task-text")).toHaveText([
-    "Atividade extra A",
-  ]);
+  await expect(destination.locator(".task-text")).toHaveText(["Item extra A"]);
   await expect(
     destination.getByRole("button", {
-      name: "Ver comentário: Atividade extra A",
+      name: "Detalhes do item: Item extra A",
       exact: true,
     }),
   ).toBeVisible();
@@ -280,7 +634,7 @@ test("inclusão contínua, arraste entre etapas e ordem compartilhada", async ({
     has: second.getByRole("heading", { name: "Destino vazio", exact: true }),
   });
   await expect(remoteDestination.locator(".task-text")).toHaveText(
-    ["Atividade extra A"],
+    ["Item extra A"],
     { timeout: 10000 },
   );
   await page
@@ -289,7 +643,7 @@ test("inclusão contínua, arraste entre etapas e ordem compartilhada", async ({
   await drag(
     page,
     page.getByRole("button", {
-      name: "Mover etapa Destino vazio",
+      name: "Mover seção Destino vazio",
       exact: true,
     }),
     first.locator(".section-header"),
@@ -309,23 +663,23 @@ test("inclusão contínua, arraste entre etapas e ordem compartilhada", async ({
   await drag(
     page,
     page.getByRole("button", {
-      name: "Mover atividade: Atividade extra B",
+      name: "Mover item: Item extra B",
       exact: true,
     }),
     destination.locator(".section-header"),
   );
   await expect(destination.locator(".task-text")).toHaveText([
-    "Atividade extra A",
-    "Atividade extra B",
+    "Item extra A",
+    "Item extra B",
   ]);
-  await page.getByLabel("Pesquisar atividades").fill("extra");
+  await page.getByLabel("Pesquisar itens").fill("extra");
   await expect(
     page.getByRole("button", {
-      name: "Mover atividade: Atividade extra A",
+      name: "Mover item: Item extra A",
       exact: true,
     }),
   ).toBeDisabled();
-  await page.getByLabel("Pesquisar atividades").fill("");
+  await page.getByLabel("Pesquisar itens").fill("");
   await page.screenshot({
     path: "test-results/quick-add-and-ordering.png",
     fullPage: true,
@@ -336,7 +690,7 @@ test("inclusão contínua, arraste entre etapas e ordem compartilhada", async ({
   );
   await expect(
     page.locator(".checklist-section").first().locator(".task-text"),
-  ).toHaveText(["Atividade extra A", "Atividade extra B"]);
+  ).toHaveText(["Item extra A", "Item extra B"]);
   await context.close();
 });
 
@@ -356,7 +710,7 @@ test("ordenação por teclado e toque no celular", async ({ browser }) => {
     .getByRole("button", { name: "Recolher todas", exact: true })
     .click();
   const handle = page.getByRole("button", {
-    name: "Mover etapa Antes de começar",
+    name: "Mover seção Antes de começar",
     exact: true,
   });
   await handle.focus();
@@ -368,13 +722,13 @@ test("ordenação por teclado e toque no celular", async ({ browser }) => {
     "Mãos à obra",
   );
   const touchHandle = page.getByRole("button", {
-    name: "Mover etapa Mãos à obra",
+    name: "Mover seção Mãos à obra",
     exact: true,
   });
   await touchHandle.scrollIntoViewIfNeeded();
   const start = await touchHandle.boundingBox();
   const target = await page
-    .getByRole("button", { name: "Mover etapa Antes de começar", exact: true })
+    .getByRole("button", { name: "Mover seção Antes de começar", exact: true })
     .boundingBox();
   if (!start || !target) throw new Error("Alça não visível");
   const client = await context.newCDPSession(page);
@@ -403,7 +757,7 @@ test("ordenação por teclado e toque no celular", async ({ browser }) => {
     .getByRole("button", { name: "Expandir todas", exact: true })
     .click();
   const taskHandle = page.getByRole("button", {
-    name: "Mover atividade: Definir o que precisa ser feito",
+    name: "Mover item: Definir o que precisa ser feito",
     exact: true,
   });
   await taskHandle.focus();
@@ -436,7 +790,7 @@ test("falha de conexão mantém o texto de inclusão para tentar novamente", asy
   await expect(
     page.getByRole("heading", { name: "Conexão instável", exact: true }),
   ).toBeVisible();
-  const input = page.getByLabel("Nova atividade em Antes de começar", {
+  const input = page.getByLabel("Novo item em Antes de começar", {
     exact: true,
   });
   await page.route("**/rpc/pro_apply", (route) => route.abort());

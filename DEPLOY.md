@@ -2,7 +2,9 @@
 
 ## Preparar o banco
 
-Para um projeto Supabase novo, execute `supabase/schema.sql` no SQL Editor. Para um banco existente que ainda não tenha ordenação, execute `supabase/migrations/20261008_001_ordering.sql`. Os deploys do frontend não aplicam scripts de banco automaticamente.
+Para esta versão com prioridade, anexos e desfazer, siga primeiro [SUPABASE.md](SUPABASE.md), incluindo a função de arquivos e a limpeza automática.
+
+Para um projeto Supabase novo, execute `supabase/schema.sql` no SQL Editor. Para um banco existente que ainda não tenha ordenação, execute `supabase/migrations/20261009_002_item_details.sql`. Os deploys do frontend não aplicam scripts de banco automaticamente.
 
 ## Conectar o GitHub e publicar
 
